@@ -50,7 +50,13 @@ check_interval = "6h"
 # Whichever is set, an unattended apply is an ordinary apply — same preflight, so a robot
 # that is walking or streaming refuses and retries at the next interval; same health gate,
 # so a release that does not come up is rolled back.
-auto_apply = "mandatory"
+#
+# lynxduck: "off". This board runs our own builds (the `lynxduck` branch), and any official
+# release installed unattended would replace them. We take upstream changes by rebasing and
+# pushing a build ourselves. install.sh never overwrites an existing /etc/robot/updater.toml,
+# so a board installed from the official repository keeps "mandatory" until
+# scripts/lynxduck-no-autoupdate.sh is run against it.
+auto_apply = "off"
 
 # Who may apply, roll back, select or pin. Read-only calls — status, log, listInstalled,
 # check, subscribe — are never gated by this: reaching the socket already requires its group
