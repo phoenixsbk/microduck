@@ -46,6 +46,23 @@ port = "/dev/ttyS2"
 # this line. Needs a robotd restart.
 # fast_sync_read = true
 
+# Where the body IMU is read from. "bus" is the imu_to_dxl board at Dynamixel id 200, read
+# with the servos. "i2c" is an LSM6DSV16X wired straight to an I2C bus instead — for a robot
+# built without that board — and drops id 200 from the bus read. Same chip, same scales, same
+# fused quaternion, so the policy cannot tell the two apart. Needs a robotd restart.
+# body_imu = "bus"
+#
+# For body_imu = "i2c": the bus and the chip's address. /dev/i2c-3 is the RPI Robot HAT's
+# Qwiic connector J5 on a Radxa Zero 3W; 0x6b (SA0 high) keeps clear of the HAT's own
+# LSM6DSV16X at 0x6a.
+# body_imu_i2c = "/dev/i2c-3"
+# body_imu_address = 0x6b
+#
+# How the body IMU sits in the trunk. "board" follows the board version set above, which is
+# right for the imu_to_dxl board. An I2C module is wherever it was screwed down: "zero3" is the chip's +X
+# pointing down and +Z forward, "beta" is flat with +X forward and +Z up.
+# body_imu_mount = "board"
+
 # Every value below that is commented out shows the built-in default. LEAVE IT COMMENTED
 # unless this robot genuinely needs a different value: install.sh copies this file to
 # /etc/robot/robotd.toml once and never overwrites it, so an uncommented value is frozen on

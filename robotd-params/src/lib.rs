@@ -2517,6 +2517,111 @@ pub struct Bus {
     /// the bus drops, `update_gate` sees an unhealthy robot, and a release that turned this on
     /// against firmware that cannot do it is rolled back on its own.
     pub fast_sync_read: bool,
+    /// Where the body IMU is read from. `bus` is the `imu_to_dxl` board at Dynamixel id 200,
+    /// fetched in the same sync read as the servos. `i2c` is an LSM6DSV16X wired straight to an
+    /// I²C bus (`body_imu_i2c`, `body_imu_address`), for a robot built without that board: the
+    /// same chip in the same configuration, so the policy sees the same signal either way.
+    pub body_imu: BodyImuSource,
+    /// The I²C bus device for `body_imu = "i2c"`. `/dev/i2c-3` is the RPI Robot HAT's Qwiic
+    /// connector J5 on a Radxa Zero 3W (header pins 3/5).
+    pub body_imu_i2c: String,
+    /// The chip's 7-bit address for `body_imu = "i2c"`. `0x6b` (SA0 high) keeps clear of the
+    /// HAT's own LSM6DSV16X at `0x6a`.
+    pub body_imu_address: u16,
+    /// How the body IMU sits in the trunk. `board` follows `[board] version` — on edge for a
+    /// `zero3`, flat for a `beta` — which is right for the `imu_to_dxl` board. An I²C module
+    /// is mounted wherever its builder put it, so this names the mount outright: `zero3` is the
+    /// chip's +X pointing down with +Z forward, `beta` is flat with +X forward and +Z up.
+    pub body_imu_mount: BodyImuMount,
+}
+
+/// Where `robotd` reads the body IMU from — see [`Bus::body_imu`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BodyImuSource {
+    /// The `imu_to_dxl` board on the Dynamixel bus, id 200.
+    #[default]
+    Bus,
+    /// An LSM6DSV16X on an I²C bus.
+    I2c,
+}
+
+/// Every [`BodyImuSource`], as the file spells them.
+pub const BODY_IMU_SOURCE_LABELS: &[&str] = &["bus", "i2c"];
+
+/// How the body IMU is mounted — see [`Bus::body_imu_mount`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BodyImuMount {
+    /// Whatever `[board] version` implies.
+    #[default]
+    Board,
+    /// On edge, as the `imu_to_dxl` board stands in a `zero3`.
+    Zero3,
+    /// Flat, axes already the trunk's, as the power board lies in a `beta`.
+    Beta,
+}
+
+/// Every [`BodyImuMount`], as the file spells them.
+pub const BODY_IMU_MOUNT_LABELS: &[&str] = &["board", "zero3", "beta"];
+
+impl BodyImuMount {
+    /// The board whose mount this is: `self` when named outright, `board` when it follows it.
+    pub fn resolve(self, board: board::Board) -> board::Board {
+        match self {
+            Self::Board => board,
+            Self::Zero3 => board::Board::Zero3,
+            Self::Beta => board::Board::Beta,
+        }
+    }
+}
+
+#[cfg(test)]
+mod body_imu_tests {
+    use super::*;
+
+    /// The labels the registry offers are exactly what the file parses, in both enums.
+    #[test]
+    fn every_body_imu_label_round_trips() {
+        let sources = [BodyImuSource::Bus, BodyImuSource::I2c];
+        assert_eq!(BODY_IMU_SOURCE_LABELS.len(), sources.len());
+        for (label, want) in BODY_IMU_SOURCE_LABELS.iter().zip(sources) {
+            let p: Params = toml::from_str(&format!("[bus]\nbody_imu = \"{label}\"\n")).unwrap();
+            assert_eq!(p.bus.body_imu, want);
+        }
+        let mounts = [BodyImuMount::Board, BodyImuMount::Zero3, BodyImuMount::Beta];
+        assert_eq!(BODY_IMU_MOUNT_LABELS.len(), mounts.len());
+        for (label, want) in BODY_IMU_MOUNT_LABELS.iter().zip(mounts) {
+            let p: Params =
+                toml::from_str(&format!("[bus]\nbody_imu_mount = \"{label}\"\n")).unwrap();
+            assert_eq!(p.bus.body_imu_mount, want);
+        }
+    }
+
+    /// Off by default: a robot that says nothing keeps reading the `imu_to_dxl` board.
+    #[test]
+    fn the_default_is_the_official_board() {
+        let p = Params::default();
+        assert_eq!(p.bus.body_imu, BodyImuSource::Bus);
+        assert_eq!(p.bus.body_imu_mount, BodyImuMount::Board);
+    }
+
+    /// A hex address is how a datasheet writes it, and TOML takes it as written.
+    #[test]
+    fn an_i2c_robot_reads_as_written() {
+        let p: Params = toml::from_str(
+            "[bus]\nbody_imu = \"i2c\"\nbody_imu_i2c = \"/dev/i2c-1\"\n\
+             body_imu_address = 0x6a\nbody_imu_mount = \"beta\"\n",
+        )
+        .unwrap();
+        assert_eq!(p.bus.body_imu, BodyImuSource::I2c);
+        assert_eq!(p.bus.body_imu_i2c, "/dev/i2c-1");
+        assert_eq!(p.bus.body_imu_address, 0x6a);
+        assert_eq!(
+            p.bus.body_imu_mount.resolve(board::Board::Zero3),
+            board::Board::Beta
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2605,6 +2710,10 @@ impl Default for Bus {
         Self {
             port: "/dev/ttyS2".into(),
             fast_sync_read: true,
+            body_imu: BodyImuSource::Bus,
+            body_imu_i2c: "/dev/i2c-3".into(),
+            body_imu_address: 0x6b,
+            body_imu_mount: BodyImuMount::Board,
         }
     }
 }
@@ -4500,6 +4609,13 @@ mod tests {
 
         assert_eq!(from_file.bus.port, built_in.bus.port);
         assert_eq!(from_file.bus.fast_sync_read, built_in.bus.fast_sync_read);
+        assert_eq!(from_file.bus.body_imu, built_in.bus.body_imu);
+        assert_eq!(from_file.bus.body_imu_i2c, built_in.bus.body_imu_i2c);
+        assert_eq!(
+            from_file.bus.body_imu_address,
+            built_in.bus.body_imu_address
+        );
+        assert_eq!(from_file.bus.body_imu_mount, built_in.bus.body_imu_mount);
         assert_eq!(from_file.control.hz, built_in.control.hz);
         assert_eq!(from_file.control.cmd_alpha, built_in.control.cmd_alpha);
         assert_eq!(from_file.control.head_alpha, built_in.control.head_alpha);

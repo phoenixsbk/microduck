@@ -44,5 +44,9 @@ rustypot = "1.8.0"
 # same reason; this crate has to as well, or cargo's feature unification turns it back on.
 serialport = { version = "4.8", default-features = false }
 
+# `ioctl(I2C_SLAVE)` for the body IMU on I²C — the same call robotd's head IMU reader makes.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 serde_json.workspace = true

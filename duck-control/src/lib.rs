@@ -7,6 +7,8 @@
 //! The control path it holds — model, bus, [`io::RobotIo`], observations, policy, safety — is
 //! designed in `docs/design/robotd-design.md` §2.
 
+/// The body IMU on I²C, for a robot without the `imu_to_dxl` board.
+pub mod body_imu;
 pub mod bus;
 pub mod fall;
 pub mod imu;
