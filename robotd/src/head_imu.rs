@@ -264,6 +264,7 @@ pub fn run(
     status: &HeadImuStatus,
     _frames: &tokio::sync::broadcast::Sender<proto::HeadImuFrame>,
     _shutdown: &std::sync::atomic::AtomicBool,
+    _skip: Option<(String, u16)>,
 ) {
     status.lost("the head IMU is on an I2C bus, which exists only on Linux".to_owned());
 }
@@ -359,13 +360,18 @@ mod reader {
         }
     }
 
-    fn find() -> Result<(Chip, String), String> {
+    fn find(skip: Option<&(String, u16)>) -> Result<(Chip, String), String> {
         let mut last = "no I2C bus to look on".to_owned();
         for bus in BUSES {
             if !std::path::Path::new(bus).exists() {
                 continue;
             }
             for &address in ADDRESSES {
+                // The body IMU when it is on I²C: the same chip, so WHO_AM_I cannot tell them
+                // apart, and configuring it as a head IMU would reset the one the policy reads.
+                if skip.is_some_and(|(b, a)| b == bus && *a == address) {
+                    continue;
+                }
                 match Chip::open(bus, address).and_then(|mut c| c.read1(WHO_AM_I).map(|w| (c, w))) {
                     Ok((chip, WHO_AM_I_VALUE)) => {
                         return Ok((chip, format!("{bus} {address:#04x}")));
@@ -383,17 +389,19 @@ mod reader {
     }
 
     /// Read the head IMU until shutdown, broadcasting frames. Reopens with backoff on any error.
+    /// `skip` is a bus and address never to take, the body IMU's when it is on I²C.
     pub fn run(
         status: &HeadImuStatus,
         frames: &tokio::sync::broadcast::Sender<proto::HeadImuFrame>,
         shutdown: &AtomicBool,
+        skip: Option<(String, u16)>,
     ) {
         let started = Instant::now();
         let period = Duration::from_secs_f64(1.0 / f64::from(WAKE_HZ));
         let mut backoff = RETRY_MIN;
         let mut seq = 0u64;
         while !shutdown.load(Ordering::Acquire) {
-            let (mut chip, at) = match find() {
+            let (mut chip, at) = match find(skip.as_ref()) {
                 Ok(found) => found,
                 Err(why) => {
                     status.lost(format!("no LSM6DSV16X answered: {why}"));

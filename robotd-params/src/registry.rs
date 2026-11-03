@@ -116,6 +116,26 @@ pub const REGISTRY: &[Entry] = &[
         Kind::Bool,
         "Read the bus with fast sync read — needs XL330 firmware v46+",
     ),
+    entry(
+        "bus.body_imu",
+        Kind::Choice(crate::BODY_IMU_SOURCE_LABELS),
+        "Body IMU on the motor bus (imu_to_dxl, id 200) or an LSM6DSV16X on I2C",
+    ),
+    entry(
+        "bus.body_imu_i2c",
+        Kind::Text,
+        "I2C bus device for body_imu = i2c",
+    ),
+    entry(
+        "bus.body_imu_address",
+        Kind::Integer,
+        "I2C address for body_imu = i2c — 0x6b clears the HAT's own IMU",
+    ),
+    entry(
+        "bus.body_imu_mount",
+        Kind::Choice(crate::BODY_IMU_MOUNT_LABELS),
+        "How the body IMU sits in the trunk; board follows [board] version",
+    ),
     // ── [control] ────────────────────────────────────────────────────────────
     entry("control.hz", Kind::Integer, "Control loop rate"),
     entry(

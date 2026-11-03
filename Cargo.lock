@@ -1192,6 +1192,7 @@ name = "duck-control"
 version = "0.18.3"
 dependencies = [
  "duck-ipc-proto",
+ "libc",
  "libloading 0.8.9",
  "ort",
  "rustypot",

@@ -1547,7 +1547,23 @@ fn open_bus(
             return None;
         }
     };
-    io.set_imu_mount(body_imu_mount(board));
+    io.set_imu_mount(body_imu_mount(bus.body_imu_mount.resolve(board)));
+    // A body IMU on I²C rather than the `imu_to_dxl` board: its reader starts now, so the chip
+    // is up by the time every servo has answered and `imu_answers` asks for it.
+    if bus.body_imu == params::BodyImuSource::I2c {
+        if loud {
+            tracing::info!(
+                i2c = bus.body_imu_i2c,
+                address = format!("{:#04x}", bus.body_imu_address),
+                "body IMU on I2C; id {} leaves the bus read",
+                duck_control::model::IMU_DXL_ID
+            );
+        }
+        io.use_external_imu(Box::new(duck_control::body_imu::I2cBodyImu::start(
+            &bus.body_imu_i2c,
+            bus.body_imu_address,
+        )));
+    }
     // Under the same `loud` rule as everything else here — a board waiting on servo power
     // retries this forever. Worth saying at all because the whole tick budget hangs off it,
     // and "turned off in robotd.toml" is otherwise indistinguishable from "this board is slow".
@@ -1587,22 +1603,23 @@ fn open_bus(
 #[cfg(target_os = "linux")]
 fn imu_answers(io: &mut BusIo, attempt: u32) -> Option<bool> {
     let loud = attempt == 0 || attempt.is_multiple_of(STARTUP_READ_LOG_EVERY);
-    let id = duck_control::model::IMU_DXL_ID;
+    // "motor bus id 200", or the I²C bus and address when the body IMU is there.
+    let imu = io.imu_location();
     match io.imu_answers() {
         Ok(true) => Some(true),
         Ok(false) => {
             if loud {
                 tracing::error!(
                     attempt,
-                    id,
-                    "every servo answered and the IMU board did not; waiting, is it plugged in?"
+                    imu,
+                    "every servo answered and the IMU did not; waiting, is it plugged in?"
                 );
             }
             Some(false)
         }
         Err(e) => {
             if loud {
-                tracing::error!(error = %e, attempt, id, "cannot ping the IMU board; waiting");
+                tracing::error!(error = %e, attempt, imu, "cannot ping the IMU; waiting");
             }
             None
         }
@@ -4345,9 +4362,12 @@ fn start_head_imu(state: &Arc<RobotState>, params: &Params, no_hardware: bool) {
         return;
     }
     let state = Arc::clone(state);
+    // The body IMU, when it is an LSM6DSV16X on I²C too, is not the head's to take.
+    let skip = (params.bus.body_imu == params::BodyImuSource::I2c)
+        .then(|| (params.bus.body_imu_i2c.clone(), params.bus.body_imu_address));
     let spawned = std::thread::Builder::new()
         .name("head-imu".into())
-        .spawn(move || head_imu::run(&state.head_imu, &state.head_imu_tx, &state.shutdown));
+        .spawn(move || head_imu::run(&state.head_imu, &state.head_imu_tx, &state.shutdown, skip));
     if let Err(e) = spawned {
         tracing::error!(error = %e, "cannot start the head IMU reader");
     }

@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use rustypot::servo::dynamixel::xl330::Xl330Controller;
 
+use crate::body_imu::ImuBlockSource;
 use crate::imu::{IMU_BLOCK_LEN, SflpDecoder};
 use crate::io::{ImuStale, IoError, JointTargets, Result, RobotIo, Sensors, SlowSensors};
 use crate::model::{
@@ -128,6 +129,9 @@ pub struct DynamixelIo {
     /// the same sample, which means the policy is being fed dead orientation data — a
     /// failure that is invisible unless someone counts it. Known to happen.
     stale_imu: StaleImuTracker,
+    /// The body IMU when it is not on this bus — see [`Self::use_external_imu`]. `None` is the
+    /// `imu_to_dxl` board at [`IMU_DXL_ID`], first in `ids`.
+    external_imu: Option<Box<dyn ImuBlockSource>>,
 }
 
 impl DynamixelIo {
@@ -147,7 +151,24 @@ impl DynamixelIo {
             fast_sync_read,
             imu: SflpDecoder::default(),
             stale_imu: StaleImuTracker::default(),
+            external_imu: None,
         })
+    }
+
+    /// Read the body IMU from `source` instead of the bus: id 200 leaves the tick's sync read
+    /// and the block comes from `source`, through the same decoder and stale tracker. Call it
+    /// right after [`Self::open`], before the first read.
+    pub fn use_external_imu(&mut self, source: Box<dyn ImuBlockSource>) {
+        self.ids = JOINT_IDS.to_vec();
+        self.external_imu = Some(source);
+    }
+
+    /// Where the body IMU is, for the journal.
+    pub fn imu_location(&self) -> String {
+        match &self.external_imu {
+            Some(source) => source.location(),
+            None => format!("motor bus id {IMU_DXL_ID}"),
+        }
     }
 
     /// The body IMU's sensor→trunk mount, which is the robot's ([`SflpDecoder::DEFAULT_MOUNT`]
@@ -264,6 +285,9 @@ impl DynamixelIo {
     /// silent IMU board otherwise surfaces as the first [`RobotIo::read`] failing — which, from
     /// outside, looks exactly like no robot at all.
     pub fn imu_answers(&mut self) -> Result<bool> {
+        if let Some(source) = &mut self.external_imu {
+            return source.answers();
+        }
         self.controller
             .ping(IMU_DXL_ID)
             .map_err(|e| IoError::Bus(format!("ping imu {IMU_DXL_ID}: {e}")))
@@ -527,10 +551,19 @@ impl RobotIo for DynamixelIo {
 
         let mut sensors = Sensors::default();
 
-        // Slot 0 is the IMU board.
-        if blocks[0].len() == IMU_BLOCK_LEN {
-            let mut raw = [0u8; IMU_BLOCK_LEN];
-            raw.copy_from_slice(&blocks[0]);
+        // Slot 0 is the IMU board — unless the IMU is elsewhere, and then every slot is a
+        // servo and the block is the external source's newest, taken after the servos so it
+        // is as fresh as the read.
+        let (imu_block, motor_blocks) = match &mut self.external_imu {
+            Some(source) => (Some(source.latest()?), &blocks[..]),
+            None => (None, &blocks[1..]),
+        };
+        if imu_block.is_some() || blocks[0].len() == IMU_BLOCK_LEN {
+            let raw = imu_block.unwrap_or_else(|| {
+                let mut raw = [0u8; IMU_BLOCK_LEN];
+                raw.copy_from_slice(&blocks[0]);
+                raw
+            });
             // Say so, or the counters are numbers nobody ever reads — but only once the run
             // is long enough to mean something. Rate-limited past that because a board which
             // has stopped refreshing produces one of these every single tick, and 50 Hz of
@@ -552,7 +585,7 @@ impl RobotIo for DynamixelIo {
             });
         }
 
-        for (joint, block) in blocks[1..].iter().enumerate() {
+        for (joint, block) in motor_blocks.iter().enumerate() {
             if block.len() != READ_LEN as usize {
                 return Err(IoError::ShortRead {
                     what: "motor block",
